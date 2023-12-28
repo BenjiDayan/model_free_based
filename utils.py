@@ -23,7 +23,7 @@ def read_fn(fn):
     return df
 
 
-def wrangle_df(df):
+def wrangle_df(df, drop_minus_reward=True):
     # rename columns
     """A = trial_num
     B = drift 1 (probability of reward after second stage option 1)
@@ -69,7 +69,8 @@ def wrangle_df(df):
     # drop rows where reward is -1. These seem to be where the participant
     # did not respond in time, i.e. RT=2502?
     df.reward = df.reward.astype(int)
-    df = df.loc[df.reward != -1].copy()
+    if drop_minus_reward:
+        df = df.loc[df.reward != -1].copy()
     df.reset_index(drop=True, inplace=True)
 
     # reset index
@@ -164,7 +165,7 @@ def plot_barplot(df_outs):
     plt.legend()
     
 
-def run_model_on_file(fn, model):
+def run_model_on_file(fn, model: models.Model):
     """fn is the filename of the csv file for a subject - contains
     the drifting reward probabilities for each trial. We will run the model as agent
     on this data (ignoring the actions and rewards of the actual subject)
@@ -206,7 +207,12 @@ def run_model_on_file(fn, model):
 
 def subject_fn_to_reward_probs(fn):
     df = read_fn(fn)
-    df = wrangle_df(df)
+    # This actually removes trials where the subject did not respond in time
+    df = wrangle_df(df, drop_minus_reward=False)
+
+    # reward probs to floats
+    df.loc[:, ['drift1', 'drift2', 'drift3', 'drift4']] = \
+        df.loc[:, ['drift1', 'drift2', 'drift3', 'drift4']].astype(float)
     drifts_iterator = (x[1] for x in df.loc[:, ['drift1', 'drift2', 'drift3', 'drift4']].iterrows())
     return drifts_iterator
 
@@ -220,6 +226,12 @@ def run_model_simpler(model, reward_probs_iterator):
 
     We will use this to try to calibrate different models to have the same reward rate
     """
+    # df with choice1, stage2, choice2, reward as columns, for 200 trials
+    outs = model.perform_trials(
+        reward_probs_iterator, save_Qs=False, save_probs=False, randomise=False)
+    return outs
+
+
 
 
 def plot_4_case_empirical_stay_probs(model_empirical_stay_probs):
