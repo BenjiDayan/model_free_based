@@ -58,7 +58,7 @@ def dist_buckets(num_buckets, num_balls):
     return outputs
 
 
-def unif_random_simplex_sample_with_0s(dim: int, total_samples=100, ratio=5):
+def unif_random_simplex_sample_with_0s(dim: int, total_samples=100, ratio=5, print_=False):
     """sample total_samples points from the simplex in dim dimensions.
     However we make sure to cover all the important points with dimensions zeroed out:
     
@@ -95,7 +95,8 @@ def unif_random_simplex_sample_with_0s(dim: int, total_samples=100, ratio=5):
     # we ignore the first buckets, which is just 1 point each
     Sigma = (1/ratio) * ((1 + ratio)**dim - 1) - dim
     total_samples -= dim
-    print(Sigma)
+    if print_:
+        print(Sigma)
 
     total_balls = 0
     for num_non_zero in range(1, dim+1):
@@ -114,7 +115,8 @@ def unif_random_simplex_sample_with_0s(dim: int, total_samples=100, ratio=5):
             total_balls += num_balls
         num_per_bucket = dist_buckets(num_buckets, num_balls)
         for non_zeroed_indices, num_samples in zip(combinations, num_per_bucket):
-            print(non_zeroed_indices, num_samples)
+            if print_:
+                print(non_zeroed_indices, num_samples)
             for _ in range(num_samples):
                 output = np.zeros(dim)
                 non_zeros = unif_random_simplex_sample(num_non_zero)
@@ -145,63 +147,101 @@ beta_mb, beta_mf0, beta_mf1 = betas * lam
 
 from tqdm import tqdm
 from multiprocessing import Pool
-def model_reward_single_trial(**kwargs):
-    model_kwargs2 = model_kwargs.copy()
-    model_kwargs2.update(kwargs)
-    beta_mb, beta_mf0, beta_mf1 = betas
-    model = models.Model(**model_kwargs2)
+def model_reward_single_trial(kwargs):
+    model = models.Model(**kwargs)
     outs = model.perform_trials(
         reward_probs_list, save_Qs=False, save_probs=False, randomise=False)
     return outs.reward.mean()
 
-def model_reward(betas, n=35):
+def model_reward(kwargs, n=35):
+    model_kwargs2 = model_kwargs.copy()
+    model_kwargs2.update(kwargs)
     subject_mean_rewards = []
     for _ in tqdm(range(n), total=n):
-        subject_mean_rewards.append(model_reward_single_trial(betas))
+        subject_mean_rewards.append(model_reward_single_trial(model_kwargs2))
 
-    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n)
+    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs2
 
-def model_reward_pooled(betas, n=35):
+def model_reward_pooled(kwargs, n=35):
+    model_kwargs2 = model_kwargs.copy()
+    model_kwargs2.update(kwargs)
     with Pool() as p:
-        subject_mean_rewards = list(p.imap(model_reward_single_trial, [betas for _ in range(n)]))
+        subject_mean_rewards = list(p.imap(model_reward_single_trial, (model_kwargs2 for _ in range(n))))
 
-    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n)
+    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs2
+
+
+
+def do_kwargs(kwargs, output_file, n=400):
+    print('; '.join([f'{k}: {v:.3f}' for k, v in kwargs.items()]))
+    rew_rate, rew_rate_stderr, full_kwargs = model_reward(kwargs, n=n)    
+    outs.append((kwargs, rew_rate, rew_rate_stderr))
+    # print confidence interval
+    print(f'CI: {rew_rate - 1.96 * rew_rate_stderr:.3f}, {rew_rate + 1.96 * rew_rate_stderr:.3f}')
+
+    full_kwargs['rew_rate'] = rew_rate
+    full_kwargs['rew_rate_stderr'] = rew_rate_stderr
+    df_row = pd.DataFrame([full_kwargs], columns=full_kwargs.keys())
+    # if is first time, write header
+    if not os.path.exists(output_file):
+        df_row.to_csv(output_file, mode='w', header=True, index=False)
+    else:
+        df_row.to_csv(output_file, mode='a', header=False, index=False)
 
 betas = np.array([1.0, 0.0, 0.0])
 lam = 8.0
 beta_mb, beta_mf0, beta_mf1 = betas * lam
 outs = []
 
-def process_betas(betas, n=160):
-    beta_mb, beta_mf0, beta_mf1 = betas
-    print(f'beta_mb: {beta_mb:.3f}, beta_mf0: {beta_mf0:.3f}, beta_mf1: {beta_mf1:.3f}')
-    rew_rate, rew_rate_stderr = model_reward((beta_mb, beta_mf0, beta_mf1), n=n)
-    # print(f'rew_rate: {rew_rate:.3f}, rew_rate_stderr: {rew_rate_stderr:.3f}')
-    # print confidence interval
-    print(f'CI: {rew_rate - 1.96 * rew_rate_stderr:.3f}, {rew_rate + 1.96 * rew_rate_stderr:.3f}')
-    return (betas, rew_rate, rew_rate_stderr)
+# alphas = [0.03, 0.05, 0.1, 0.15, 0.25, 0.4]
+# alphas roughly 1.5x spaced apart, starting from 0.01
+alphas = [0.01 * 1.5**i for i in range(10)]
+# rounded to 4dp
+alphas = [round(x, 4) for x in alphas]
 
+# sigma(lambda * 0.3) vs sigma(lambda' * 0.3)
+# if we want exp(lambda * 0.3) to be roughly 1.4x factors apart, we need
+# lambda' = lambda + log(1.4) / 0.3 ~= lambda + 1.2
+lams = [0.0, 0.5, 1.0] + [1.0 + 1.3 * i for i in range(1, 8)]
+
+betas_list = list(unif_random_simplex_sample_with_0s(3, 30, 2))
 
 if __name__ == '__main__':
+    output_file = 'data_generation_output.csv'
     # with Pool() as p:
     #     betas_list = [lam * betas for lam in [1.0, 2.0, 4.0, 8.0]]
     #     ns_list = [200]*len(betas_list)
     #     outs = p.starmap(process_betas, list(zip(betas_list, ns_list)))
 
-    for lam in [1.0, 2.0, 4.0, 8.0]:
-        my_betas = lam * betas
-        print(f'beta_mb: {my_betas[0]:.3f}, beta_mf0: {my_betas[1]:.3f}, beta_mf1: {my_betas[2]:.3f}')
-        rew_rate, rew_rate_stderr = model_reward_pooled(my_betas, n=200)    
-        outs.append((my_betas, rew_rate, rew_rate_stderr))
-        # print confidence interval
-        print(f'CI: {rew_rate - 1.96 * rew_rate_stderr:.3f}, {rew_rate + 1.96 * rew_rate_stderr:.3f}')
+    # for lam in [1.0, 2.0, 4.0, 8.0]:
+    # for alpha in [0.05, 0.1, 0.15, 0.25]:
+    for alpha in alphas:
+        for lam in lams:
+            for my_betas in betas_list:
+                beta_mb, beta_mf0, beta_mf1 = lam * my_betas
+                # beta_mb, beta_mf0, beta_mf1 = betas
+                kwargs = {
+                    'beta_mb': beta_mb,
+                    'beta_mf0': beta_mf0,
+                    'beta_mf1': beta_mf1,
+                    'alpha': alpha
+                }
+                do_kwargs(kwargs, output_file, n=600)
 
-    # print(outs)
+    # # print bar plots of reward rates +/- stderr for each lam
+    # print (outs)
+    # fig, ax = plt.subplots()
+    # for kwargs, rew_rate, rew_rate_stderr in outs:
+    #     # lam = kwargs['beta_mb']
+    #     # ax.bar(str(lam), rew_rate, yerr=rew_rate_stderr, label=f'lam={lam}')
+    #     alpha = kwargs['alpha']
+    #     ax.bar(str(alpha), rew_rate, yerr=rew_rate_stderr, label=f'alpha={alpha}')
+    # ax.set_ylim(0.5, 0.7)
+    # plt.show()
 
-    # print bar plots of reward rates +/- stderr for each lam
-    fig, ax = plt.subplots()
-    for betas, rew_rate, rew_rate_stderr in outs:
-        lam = betas[0]
-        ax.bar(str(lam), rew_rate, yerr=rew_rate_stderr, label=f'lam={lam}')
-    ax.set_ylim(0.5, 0.7)
-    plt.show()
+
+
+
+
+##### TODO I think we actually care about episodes where reward rate was a particular smth, not just
+# betas which on average give a particular reward rate.
