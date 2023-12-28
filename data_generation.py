@@ -146,6 +146,8 @@ beta_mb, beta_mf0, beta_mf1 = betas * lam
 
 
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
+
 from multiprocessing import Pool
 def model_reward_single_trial(kwargs):
     model = models.Model(**kwargs)
@@ -157,7 +159,8 @@ def model_reward(kwargs, n=35):
     model_kwargs2 = model_kwargs.copy()
     model_kwargs2.update(kwargs)
     subject_mean_rewards = []
-    for _ in tqdm(range(n), total=n):
+    # for _ in tqdm(range(n), total=n):
+    for _ in range(n):
         subject_mean_rewards.append(model_reward_single_trial(model_kwargs2))
 
     return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs2
@@ -165,19 +168,21 @@ def model_reward(kwargs, n=35):
 def model_reward_pooled(kwargs, n=35):
     model_kwargs2 = model_kwargs.copy()
     model_kwargs2.update(kwargs)
-    with Pool() as p:
+    with Pool(processes=8) as p:
         subject_mean_rewards = list(p.imap(model_reward_single_trial, (model_kwargs2 for _ in range(n))))
 
     return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs2
 
 
+def do_kwargs_star(args):
+    return do_kwargs(*args)
 
 def do_kwargs(kwargs, output_file, n=400):
-    print('; '.join([f'{k}: {v:.3f}' for k, v in kwargs.items()]))
     rew_rate, rew_rate_stderr, full_kwargs = model_reward(kwargs, n=n)    
     outs.append((kwargs, rew_rate, rew_rate_stderr))
     # print confidence interval
-    print(f'CI: {rew_rate - 1.96 * rew_rate_stderr:.3f}, {rew_rate + 1.96 * rew_rate_stderr:.3f}')
+    # print('; '.join([f'{k}: {v:.3f}' for k, v in kwargs.items()]))
+    # print(f'CI: {rew_rate - 1.96 * rew_rate_stderr:.3f}, {rew_rate + 1.96 * rew_rate_stderr:.3f}')
 
     full_kwargs['rew_rate'] = rew_rate
     full_kwargs['rew_rate_stderr'] = rew_rate_stderr
@@ -187,6 +192,8 @@ def do_kwargs(kwargs, output_file, n=400):
         df_row.to_csv(output_file, mode='w', header=True, index=False)
     else:
         df_row.to_csv(output_file, mode='a', header=False, index=False)
+
+    return rew_rate, rew_rate_stderr, full_kwargs
 
 betas = np.array([1.0, 0.0, 0.0])
 lam = 8.0
@@ -205,7 +212,7 @@ alphas = [round(x, 4) for x in alphas]
 lams = [0.0, 0.5, 1.0] + [1.0 + 1.3 * i for i in range(1, 8)]
 
 betas_list = list(unif_random_simplex_sample_with_0s(3, 30, 2))
-
+kwargs_list = []
 if __name__ == '__main__':
     output_file = 'data_generation_output.csv'
     # with Pool() as p:
@@ -226,7 +233,13 @@ if __name__ == '__main__':
                     'beta_mf1': beta_mf1,
                     'alpha': alpha
                 }
-                do_kwargs(kwargs, output_file, n=600)
+                kwargs_list.append((kwargs, output_file, 300))
+
+    with Pool(processes=8) as p:
+        results = list(tqdm(p.imap(do_kwargs_star, kwargs_list), total=len(kwargs_list)))
+                
+    # with Pool(processes=3) as p:
+    #     process_map(do_kwargs, kwargs_list, max_workers=8)
 
     # # print bar plots of reward rates +/- stderr for each lam
     # print (outs)
