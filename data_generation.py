@@ -150,12 +150,20 @@ from tqdm.contrib.concurrent import process_map
 
 from multiprocessing import Pool
 def model_reward_single_trial(kwargs):
-    model = models.Model(**kwargs)
+    # Scale betas by lambda, and remove lambda from kwargs
+    kwargs2 = kwargs.copy()
+    lam = kwargs['lam']
+    del(kwargs2['lam'])
+    kwargs2['beta_mb'] = kwargs['beta_mb'] * lam
+    kwargs2['beta_mf0'] = kwargs['beta_mf0'] * lam
+    kwargs2['beta_mf1'] = kwargs['beta_mf1'] * lam
+    model = models.Model(**kwargs2)
     outs = model.perform_trials(
         reward_probs_list, save_Qs=False, save_probs=False, randomise=False)
     return outs.reward.mean()
 
 def model_reward(kwargs, n=35):
+    # integrate given kwargs with default kwargs
     model_kwargs2 = model_kwargs.copy()
     model_kwargs2.update(kwargs)
     subject_mean_rewards = []
@@ -202,57 +210,37 @@ outs = []
 
 # alphas = [0.03, 0.05, 0.1, 0.15, 0.25, 0.4]
 # alphas roughly 1.5x spaced apart, starting from 0.01
-alphas = [0.01 * 1.5**i for i in range(10)]
+alphas = [0.01 * 1.6**i for i in range(9)]
 # rounded to 4dp
 alphas = [round(x, 4) for x in alphas]
 
 # sigma(lambda * 0.3) vs sigma(lambda' * 0.3)
 # if we want exp(lambda * 0.3) to be roughly 1.4x factors apart, we need
 # lambda' = lambda + log(1.4) / 0.3 ~= lambda + 1.2
-lams = [0.0, 0.5, 1.0] + [1.0 + 1.3 * i for i in range(1, 8)]
+lams = [0.0, 0.5, 1.0] + [1.0 + 1.5 * i for i in range(1, 6)]
 
 betas_list = list(unif_random_simplex_sample_with_0s(3, 30, 2))
 kwargs_list = []
 if __name__ == '__main__':
     output_file = 'data_generation_output.csv'
-    # with Pool() as p:
-    #     betas_list = [lam * betas for lam in [1.0, 2.0, 4.0, 8.0]]
-    #     ns_list = [200]*len(betas_list)
-    #     outs = p.starmap(process_betas, list(zip(betas_list, ns_list)))
 
-    # for lam in [1.0, 2.0, 4.0, 8.0]:
-    # for alpha in [0.05, 0.1, 0.15, 0.25]:
     for alpha in alphas:
         for lam in lams:
             for my_betas in betas_list:
-                beta_mb, beta_mf0, beta_mf1 = lam * my_betas
-                # beta_mb, beta_mf0, beta_mf1 = betas
+                # beta_mb, beta_mf0, beta_mf1 = lam * my_betas
+                beta_mb, beta_mf0, beta_mf1 = my_betas
                 kwargs = {
                     'beta_mb': beta_mb,
                     'beta_mf0': beta_mf0,
                     'beta_mf1': beta_mf1,
+                    'lam': lam,
                     'alpha': alpha
                 }
-                kwargs_list.append((kwargs, output_file, 300))
+                kwargs_list.append((kwargs, output_file, 160))
 
-    with Pool(processes=8) as p:
+    with Pool(processes=10) as p:
         results = list(tqdm(p.imap(do_kwargs_star, kwargs_list), total=len(kwargs_list)))
                 
-    # with Pool(processes=3) as p:
-    #     process_map(do_kwargs, kwargs_list, max_workers=8)
-
-    # # print bar plots of reward rates +/- stderr for each lam
-    # print (outs)
-    # fig, ax = plt.subplots()
-    # for kwargs, rew_rate, rew_rate_stderr in outs:
-    #     # lam = kwargs['beta_mb']
-    #     # ax.bar(str(lam), rew_rate, yerr=rew_rate_stderr, label=f'lam={lam}')
-    #     alpha = kwargs['alpha']
-    #     ax.bar(str(alpha), rew_rate, yerr=rew_rate_stderr, label=f'alpha={alpha}')
-    # ax.set_ylim(0.5, 0.7)
-    # plt.show()
-
-
 
 
 
