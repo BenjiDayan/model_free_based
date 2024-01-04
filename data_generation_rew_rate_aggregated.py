@@ -148,7 +148,7 @@ beta_mb, beta_mf0, beta_mf1 = betas * lam
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 def model_reward_single_trial(kwargs):
     # Scale betas by lambda, and remove lambda from kwargs
     lam = kwargs['lam']
@@ -159,18 +159,18 @@ def model_reward_single_trial(kwargs):
     model = models.Model(**kwargs)
     outs = model.perform_trials(
         reward_probs_list, save_Qs=False, save_probs=False, randomise=False)
-    return outs
+    return outs.reward.mean()
 
 def model_reward(kwargs, n=35):
     # integrate given kwargs with default kwargs
     model_kwargs = MODEL_KWARGS.copy()
     model_kwargs.update(kwargs)
-    episodes_data = []
+    subject_mean_rewards = []
+    # for _ in tqdm(range(n), total=n):
     for _ in range(n):
-        episode_data = model_reward_single_trial(model_kwargs.copy())
-        episodes_data.append(episode_data)
+        subject_mean_rewards.append(model_reward_single_trial(model_kwargs.copy()))
 
-    return episodes_data, model_kwargs
+    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs
 
 # TODO fix or delete
 def model_reward_pooled(kwargs, n=35):
@@ -185,26 +185,23 @@ def model_reward_pooled(kwargs, n=35):
 def do_kwargs_star(args):
     return do_kwargs(*args)
 
-def do_kwargs(lock, kwargs, output_file, n=400):
-    episodes_data, full_kwargs = model_reward(kwargs, n=n)    
-    reward_rates = [episode_data[:, 3].mean() for episode_data in episodes_data]
+def do_kwargs(kwargs, output_file, n=400):
+    rew_rate, rew_rate_stderr, full_kwargs = model_reward(kwargs, n=n)    
+    outs.append((kwargs, rew_rate, rew_rate_stderr))
+    # print confidence interval
+    # print('; '.join([f'{k}: {v:.3f}' for k, v in kwargs.items()]))
+    # print(f'CI: {rew_rate - 1.96 * rew_rate_stderr:.3f}, {rew_rate + 1.96 * rew_rate_stderr:.3f}')
 
-    df_rows = pd.concat(\
-        [pd.DataFrame([full_kwargs] * n, columns=full_kwargs.keys()),
-         pd.DataFrame(reward_rates, columns=['reward_rate']),
-         pd.DataFrame(episodes_data, columns=['episode_data'])],
-        axis=1)
-    lock.acquire()
-    try:
-        # if is first time, write header
-        if not os.path.exists(output_file):
-            df_rows.to_csv(output_file, mode='w', header=True, index=False)
-        else:
-            df_rows.to_csv(output_file, mode='a', header=False, index=False)
-    finally:
-        lock.release()
+    full_kwargs['rew_rate'] = rew_rate
+    full_kwargs['rew_rate_stderr'] = rew_rate_stderr
+    df_row = pd.DataFrame([full_kwargs], columns=full_kwargs.keys())
+    # if is first time, write header
+    if not os.path.exists(output_file):
+        df_row.to_csv(output_file, mode='w', header=True, index=False)
+    else:
+        df_row.to_csv(output_file, mode='a', header=False, index=False)
 
-    return full_kwargs
+    return rew_rate, rew_rate_stderr, full_kwargs
 
 betas = np.array([1.0, 0.0, 0.0])
 lam = 8.0
@@ -226,7 +223,7 @@ betas_list = list(unif_random_simplex_sample_with_0s(3, 30, 2))
 kwargs_list = []
 
 if __name__ == '__main__':
-    output_file = 'data_generation_output_04_01_2024_episodic.csv'
+    output_file = 'data_generation_output_04_01_2024.csv'
 
     for alpha in alphas:
         for lam in lams:
@@ -242,10 +239,8 @@ if __name__ == '__main__':
                 }
                 kwargs_list.append((kwargs, output_file, 160))
 
-    with Manager() as manager:
-        lock = manager.Lock()
-        with Pool(processes=10) as p:
-            results = list(tqdm(p.imap(do_kwargs_star, [(lock, *args) for args in kwargs_list]), total=len(kwargs_list)))
+    with Pool(processes=10) as p:
+        results = list(tqdm(p.imap(do_kwargs_star, kwargs_list), total=len(kwargs_list)))
                 
 
 
