@@ -1,6 +1,7 @@
 # Here we will try to fit ~2000 models of different MB/MF ratios, with the aim
 # of clamping the reward gained by each on the same 200 trials
 
+from typing import Optional
 import pandas as pd
 import os
 import seaborn as sns
@@ -161,13 +162,16 @@ def model_reward_single_trial(kwargs):
         reward_probs_list, save_Qs=False, save_probs=False, randomise=False)
     return outs
 
-def model_reward(kwargs, n=35):
+def model_reward(model_kwargs, n=35):
     # integrate given kwargs with default kwargs
-    model_kwargs = MODEL_KWARGS.copy()
-    model_kwargs.update(kwargs)
+    for k, v in MODEL_KWARGS.items():
+        if k not in model_kwargs:
+            model_kwargs[k] = v
+
     episodes_data = []
     for _ in range(n):
         episode_data = model_reward_single_trial(model_kwargs.copy())
+        episode_data = episode_data.values.astype(np.uint8)
         episodes_data.append(episode_data)
 
     return episodes_data, model_kwargs
@@ -185,26 +189,46 @@ def model_reward_pooled(kwargs, n=35):
 def do_kwargs_star(args):
     return do_kwargs(*args)
 
-def do_kwargs(lock, kwargs, output_file, n=400):
-    episodes_data, full_kwargs = model_reward(kwargs, n=n)    
+import uuid
+def write_df(df, lock=None, output_file=None, output_folder='./'):
+    # if output_file is None, generate a uuid
+    output_file = str(uuid.uuid4()) + '.csv' if output_file is None else output_file
+    output_file = os.path.join(output_folder, output_file)
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    def df_to_file(df, output_file):
+        if not os.path.exists(output_file):
+            df.to_csv(output_file, mode='w', header=True, index=False)
+        else:
+            df.to_csv(output_file, mode='a', header=False, index=False)
+
+    # write file with lock if lock is not None
+    if lock is not None:
+        lock.acquire()
+        try:
+            df_to_file(df, output_file)
+        finally:
+            lock.release()
+    else:
+        df_to_file(df, output_file)
+
+
+def do_kwargs(lock: Optional['lock'], model_kwargs, output_file: Optional[str], n=400, output_folder='./'):
+    episodes_data, full_kwargs = model_reward(model_kwargs, n=n)    
     reward_rates = [episode_data[:, 3].mean() for episode_data in episodes_data]
 
     df_rows = pd.concat(\
-        [pd.DataFrame([full_kwargs] * n, columns=full_kwargs.keys()),
-         pd.DataFrame(reward_rates, columns=['reward_rate']),
-         pd.DataFrame(episodes_data, columns=['episode_data'])],
+        [pd.DataFrame([full_kwargs] * n),
+         pd.Series(reward_rates),
+         pd.Series(episodes_data)],
         axis=1)
-    lock.acquire()
-    try:
-        # if is first time, write header
-        if not os.path.exists(output_file):
-            df_rows.to_csv(output_file, mode='w', header=True, index=False)
-        else:
-            df_rows.to_csv(output_file, mode='a', header=False, index=False)
-    finally:
-        lock.release()
+    df_rows.columns = list(full_kwargs.keys()) + ['episode_reward_rate', 'episode_data']
+    write_df(df_rows, lock=lock, output_file=output_file, output_folder=output_folder)
 
     return full_kwargs
+
+
+
 
 betas = np.array([1.0, 0.0, 0.0])
 lam = 8.0
@@ -213,20 +237,20 @@ outs = []
 
 # alphas = [0.03, 0.05, 0.1, 0.15, 0.25, 0.4]
 # alphas roughly 1.5x spaced apart, starting from 0.01
-alphas = [0.01 * 1.6**i for i in range(9)]
+alphas = [0.01 * 1.2**i for i in range(20)]
 # rounded to 4dp
 alphas = [round(x, 4) for x in alphas]
 
 # sigma(lambda * 0.3) vs sigma(lambda' * 0.3)
 # if we want exp(lambda * 0.3) to be roughly 1.4x factors apart, we need
 # lambda' = lambda + log(1.4) / 0.3 ~= lambda + 1.2
-lams = [0.0, 0.5, 1.0] + [1.0 + 1.5 * i for i in range(1, 6)]
+lams = [0.0, 0.1, 0.3, 0.6] + [0.6 + 0.5 * i for i in range(1, 20)]
 
-betas_list = list(unif_random_simplex_sample_with_0s(3, 30, 2))
+betas_list = list(unif_random_simplex_sample_with_0s(3, 160, 5))
 kwargs_list = []
 
 if __name__ == '__main__':
-    output_file = 'data_generation_output_04_01_2024_episodic.csv'
+    # output_file = 'data_generation_output_04_01_2024_episodic.csv'
 
     for alpha in alphas:
         for lam in lams:
@@ -240,14 +264,14 @@ if __name__ == '__main__':
                     'lam': lam,
                     'alpha': alpha
                 }
-                kwargs_list.append((kwargs, output_file, 160))
+                # kwargs, output_file, n=35, output_folder='./'
+                kwargs_list.append((kwargs, None, 35, 'data_generation_output_04_01_2024_episodic'))
 
-    with Manager() as manager:
-        lock = manager.Lock()
-        with Pool(processes=10) as p:
-            results = list(tqdm(p.imap(do_kwargs_star, [(lock, *args) for args in kwargs_list]), total=len(kwargs_list)))
+    # with Manager() as manager:
+    #     lock = manager.Lock()
+    with Pool(processes=10) as p:
+        results = list(tqdm(p.imap(do_kwargs_star, [(None, *args) for args in kwargs_list]), total=len(kwargs_list)))
                 
-
 
 
 ##### TODO I think we actually care about episodes where reward rate was a particular smth, not just
