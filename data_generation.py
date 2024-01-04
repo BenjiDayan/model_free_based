@@ -126,7 +126,7 @@ def unif_random_simplex_sample_with_0s(dim: int, total_samples=100, ratio=5, pri
 
 
 ### above as a dictionary
-model_kwargs = {
+MODEL_KWARGS = {
     'beta_stage2': 8.0,
     'beta_mf0': 0.0,
     'beta_mf1': 0.0,
@@ -151,28 +151,28 @@ from tqdm.contrib.concurrent import process_map
 from multiprocessing import Pool
 def model_reward_single_trial(kwargs):
     # Scale betas by lambda, and remove lambda from kwargs
-    kwargs2 = kwargs.copy()
     lam = kwargs['lam']
-    del(kwargs2['lam'])
-    kwargs2['beta_mb'] = kwargs['beta_mb'] * lam
-    kwargs2['beta_mf0'] = kwargs['beta_mf0'] * lam
-    kwargs2['beta_mf1'] = kwargs['beta_mf1'] * lam
-    model = models.Model(**kwargs2)
+    del(kwargs['lam'])
+    kwargs['beta_mb'] = kwargs['beta_mb'] * lam
+    kwargs['beta_mf0'] = kwargs['beta_mf0'] * lam
+    kwargs['beta_mf1'] = kwargs['beta_mf1'] * lam
+    model = models.Model(**kwargs)
     outs = model.perform_trials(
         reward_probs_list, save_Qs=False, save_probs=False, randomise=False)
     return outs.reward.mean()
 
 def model_reward(kwargs, n=35):
     # integrate given kwargs with default kwargs
-    model_kwargs2 = model_kwargs.copy()
-    model_kwargs2.update(kwargs)
+    model_kwargs = MODEL_KWARGS.copy()
+    model_kwargs.update(kwargs)
     subject_mean_rewards = []
     # for _ in tqdm(range(n), total=n):
     for _ in range(n):
-        subject_mean_rewards.append(model_reward_single_trial(model_kwargs2))
+        subject_mean_rewards.append(model_reward_single_trial(model_kwargs.copy()))
 
-    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs2
+    return np.mean(subject_mean_rewards), np.std(subject_mean_rewards)/np.sqrt(n), model_kwargs
 
+# TODO fix or delete
 def model_reward_pooled(kwargs, n=35):
     model_kwargs2 = model_kwargs.copy()
     model_kwargs2.update(kwargs)
@@ -221,8 +221,9 @@ lams = [0.0, 0.5, 1.0] + [1.0 + 1.5 * i for i in range(1, 6)]
 
 betas_list = list(unif_random_simplex_sample_with_0s(3, 30, 2))
 kwargs_list = []
+
 if __name__ == '__main__':
-    output_file = 'data_generation_output.csv'
+    output_file = 'data_generation_output_04_01_2024.csv'
 
     for alpha in alphas:
         for lam in lams:
