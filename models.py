@@ -87,6 +87,29 @@ class Q_MF1(Qclass):
         self.Q[choice1] = (1 - self.alpha) * self.Q[choice1] + self.alpha * reward
 
 
+class Q_MF_mixed(Qclass):
+    def __init__(self, Qstage2, lam=0.57, **kwargs):
+        """lam=0.57 is the median reported in 2011 Daw Dayan paper"""
+        super().__init__(**kwargs)
+
+        # Q(choice1)
+        self.Q = np.array([0.5, 0.5])
+        self.lam = lam
+
+        self.Qstage2 = Qstage2
+
+    def get_val(self, choice1):
+        return self.Q[choice1]
+
+    def update(self, choice1, stage2, choice2, reward):
+        # SARSA(1) means update as montecarlo for the whole episode, which is just the end reward.
+        # (1-l) (R1 + lR2 + l^2R3 + ...) + l^t-1 Rt is basically the formula for the geometric series
+        # where Rt is the final reward, because this is actually 
+        # (1-l) R1 + ... + l^t-1 Rt + l^t Rt + l^t+1 Rt + ...)
+        self.Q[choice1] = (1 - self.alpha) * self.Q[choice1] + self.alpha * \
+            ((1 - self.lam) * self.Qstage2.Q[(stage2, choice2)] + self.lam * reward)
+
+
 class Model:
     def __init__(self, alpha=0.1, beta_stage2=1.0, beta_mb=1.0, beta_mf0=1.0, beta_mf1=1.0, beta_stick=1.0, Q_MB_rare_prob=0.0):
         self.alpha = alpha
@@ -98,6 +121,8 @@ class Model:
         self.Q_MB = Q_MB(self.Qstage2, rare_prob=Q_MB_rare_prob, beta=beta_mb)
         self.Q_MF0 = Q_MF0(self.Qstage2, beta=beta_mf0, alpha=alpha)
         self.Q_MF1 = Q_MF1(beta=beta_mf1, alpha=alpha)
+
+        self.Qs = [self.Q_MB, self.Q_MF0, self.Q_MF1]
 
 
         # State is which stage2 we end up in
@@ -113,7 +138,7 @@ class Model:
         """prev_choice1 is the choice we made in the previous trial - propensity to stick"""
         beta_scaled_qs = np.array(
             [
-                [Q.get_beta_scaled_val(choice) for Q in [self.Q_MB, self.Q_MF0, self.Q_MF1]]
+                [Q.get_beta_scaled_val(choice) for Q in self.Qs]
                   + [self.beta_stick if choice == prev_choice1 else 0]
                 for choice in [0, 1]
             ])
@@ -164,10 +189,8 @@ class Model:
             self.update(choice1, stage2, choice2, reward)
             prev_choice1 = choice1
             if save_Qs:
-                row['Qstage2'] = self.Qstage2.Q.copy()
-                row['Q_MB'] = np.array([self.Q_MB.get_val(0), self.Q_MB.get_val(1)])
-                row['Q_MF0'] = self.Q_MF0.Q.copy()
-                row['Q_MF1'] = self.Q_MF1.Q.copy()
+                Q_dict = self.get_Q_vals()
+                row.update(Q_dict)
                 
             row = {key: [val] for key, val in row.items()}
             if outs is None:
@@ -176,6 +199,37 @@ class Model:
                 outs = pd.concat([outs, pd.DataFrame(row, index=[0])], ignore_index=True)
 
         return outs
+    
+    def get_Q_vals(self):
+        out = {}
+        out['Qstage2'] = self.Qstage2.Q.copy()
+        out['Q_MB'] = np.array([self.Q_MB.get_val(0), self.Q_MB.get_val(1)])
+        out['Q_MF0'] = self.Q_MF0.Q.copy()
+        out['Q_MF1'] = self.Q_MF1.Q.copy()
+        return out
 
-        
 
+class Model_lam(Model):
+    def __init__(self, alpha=0.1, lam=0.57, beta_stage2=1.0, beta_mb=1.0, beta_mf=1.0, beta_stick=1.0, Q_MB_rare_prob=0.0):
+        self.alpha = alpha
+
+        self.beta_stick = beta_stick
+        self.rare_prob = 0.3
+
+        self.Qstage2 = Qstage2(beta=beta_stage2, alpha=alpha)
+        self.Q_MB = Q_MB(self.Qstage2, rare_prob=Q_MB_rare_prob, beta=beta_mb)
+        self.Q_MF = Q_MF_mixed(self.Qstage2, lam=lam, beta=beta_mf, alpha=alpha)
+
+        self.Qs = [self.Q_MB, self.Q_MF]
+
+    
+    def update(self, choice1, stage2, choice2, reward):
+        self.Q_MF.update(choice1, stage2, choice2, reward)
+        self.Qstage2.update(stage2, choice2, reward)
+
+    def get_Q_vals(self):
+        out = {}
+        out['Qstage2'] = self.Qstage2.Q.copy()
+        out['Q_MB'] = np.array([self.Q_MB.get_val(0), self.Q_MB.get_val(1)])
+        out['Q_MF'] = self.Q_MF.Q.copy()
+        return out
