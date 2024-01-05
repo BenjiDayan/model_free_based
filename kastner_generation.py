@@ -88,10 +88,7 @@ def write_df(df, lock=None, output_file=None, output_folder='./'):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     def df_to_file(df, output_file):
-        if not os.path.exists(output_file):
-            df.to_csv(output_file, mode='w', header=True, index=False)
-        else:
-            df.to_csv(output_file, mode='a', header=False, index=False)
+        df.to_pickle(output_file)
 
     # write file with lock if lock is not None
     if lock is not None:
@@ -143,6 +140,19 @@ if __name__ == '__main__':
     output_folder = 'kastner_generation_05_01_2024'
     kwargs_list = []
 
+
+    ##### b)
+    # 5001 action sequences for MB/MF weighting being
+    # 0, 1/5000, 2/5000, ..., 5000/5000
+
+    for beta_mb in np.linspace(0, 8, 5001):
+        kwargs = {
+            'beta_mb': beta_mb,
+            'beta_mf': 8.0 - beta_mb,
+        }
+        kwargs_list.append((kwargs, None, 1, output_folder))
+
+
     ###### a)
     # 500 action sequences each of pure MB and pure MF
     kwargs = {
@@ -156,17 +166,6 @@ if __name__ == '__main__':
         'beta_mf': 0.0,
     }
     kwargs_list.append((kwargs, None, 500, output_folder))
-
-    ##### b)
-    # 5001 action sequences for MB/MF weighting being
-    # 0, 1/5000, 2/5000, ..., 5000/5000
-
-    for beta_mb in np.linspace(0, 8, 5001):
-        kwargs = {
-            'beta_mb': beta_mb,
-            'beta_mf': 8.0 - beta_mb,
-        }
-        kwargs_list.append((kwargs, None, 1, output_folder))
 
     ##### c) 
     # 20100 action sequences for 201 values of MB/MF weighting
