@@ -26,6 +26,31 @@ def arr_to_kastner_format(arr):
     return arr3.transpose(1, 2, 0)  # 400 x 2 x N
 
 
+def df_to_hdf5(out_df, hdf5_fn, sub_grp=''):
+    """
+    Writes 'episode_data', and 'model_params' datasets to hdf5_fn, optionally under
+    sub_grp a la sub_grp/episode_data etc.
+    """
+    out_df = out_df.copy()
+    # choice1, stage2, choice2, reward, (N x 4 array) uint8 array
+    arr = np.stack(out_df.loc[:, 'episode_data'].values)
+    arr = arr_to_kastner_format(arr)
+    arr = arr.astype(np.uint8)
+
+    with h5py.File(hdf5_fn, 'a') as f:
+        key = os.path.join(sub_grp, 'episode_data') if sub_grp else 'episode_data'
+        f.create_dataset(key, data=arr)
+
+
+    out_df.drop('episode_data', axis=1, inplace=True)
+    # model_params dataset:
+    # for some reason columns aren't easily findable, but they are:
+    # Index(['beta_mb', 'beta_mf', 'alpha', 'beta_stage2', 'beta_stick',
+    #       'Q_MB_rare_prob', 'episode_reward_rate'], dtype='object')
+    key = os.path.join(sub_grp, 'model_params') if sub_grp else 'model_params'
+    out_df.to_hdf(hdf5_fn, key=key, mode='a', format='table')
+
+
 path = './kastner_generation_05_01_2024'
 
 # Get all the files in the folder
@@ -42,19 +67,30 @@ out_df = pd.concat(out_dfs, axis=0)
 # give it a new index
 out_df.reset_index(inplace=True, drop=True)
 
+AB = out_df.loc[out_df.alpha==0.2]
+C = out_df.loc[out_df.alpha != 0.2]
+A_MF = AB.loc[AB.beta_mb==0.0]
+A_MB = AB.loc[AB.beta_mf==0.0]
 
-# choice1, stage2, choice2, reward, (N x 4 array) uint8 array
-arr = np.stack(out_df.loc[:, 'episode_data'].values)
-arr = arr_to_kastner_format(arr)
-arr = arr.astype(np.uint8)
+# B is AB without A_MF and A_MB
+B = AB.loc[list(set(AB.index) - set(A_MF.index) - set(A_MB.index))]
 
-with h5py.File('kastner_generation_05_01_2024.hdf5', 'w') as f:
-    f.create_dataset('episode_data', data=arr)
+AB.shape, A_MF.shape, A_MB.shape, B.shape, C.shape
 
+# move the first row of A_MF and A_MB to B
+a1, a2 = A_MF.iloc[0].to_frame().T, A_MB.iloc[0].to_frame().T
+for col in a1.columns:
+    a1[col] = a1[col].astype(B[col].dtype)
+    a2[col] = a2[col].astype(B[col].dtype)
+B = pd.concat([B, a1, a2], axis=0)
 
-out_df.drop('episode_data', axis=1, inplace=True)
-# model_params dataset:
-# for some reason columns aren't easily findable, but they are:
-# Index(['beta_mb', 'beta_mf', 'alpha', 'beta_stage2', 'beta_stick',
-#       'Q_MB_rare_prob', 'episode_reward_rate'], dtype='object')
-out_df.to_hdf('kastner_generation_05_01_2024.hdf5', key='model_params', mode='a', format='table')
+# remove from A_MF and A_MB
+A_MF = A_MF.iloc[1:]
+A_MB = A_MB.iloc[1:]
+
+hdf5_fn = 'kastner_generation_09_01_2024.hdf5'
+
+df_to_hdf5(A_MF, hdf5_fn, sub_grp='MF_500')
+df_to_hdf5(A_MB, hdf5_fn, sub_grp='MB_500')
+df_to_hdf5(B, hdf5_fn, sub_grp='MF_to_MB_5001')
+df_to_hdf5(C, hdf5_fn, sub_grp='MF_to_MB_201_alpha_100')
