@@ -18,7 +18,7 @@ import math
 
 import itertools
 
-path = './osfstorage-archive/Experiment 1/twostep_data_study1/'
+path = '../osfstorage-archive/Experiment 1/twostep_data_study1/'
 paths = [path + x for x in os.listdir(path) if x.endswith('.csv')]
 
 fn = paths[0]
@@ -50,7 +50,7 @@ from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 
 from multiprocessing import Pool, Manager
-def model_reward_single_trial(kwargs):
+def model_reward_single_trial(reward_probs_list, kwargs):
     # Scale betas by lambda, and remove lambda from kwargs
     # lam = kwargs['lam']
     # del(kwargs['lam'])
@@ -62,7 +62,7 @@ def model_reward_single_trial(kwargs):
         reward_probs_list, save_Qs=False, save_probs=False, randomise=False)
     return outs
 
-def model_reward(model_kwargs, n=35):
+def model_reward(reward_probs_list, model_kwargs, n=35):
     # integrate given kwargs with default kwargs
     for k, v in MODEL_KWARGS.items():
         if k not in model_kwargs:
@@ -70,7 +70,7 @@ def model_reward(model_kwargs, n=35):
 
     episodes_data = []
     for _ in range(n):
-        episode_data = model_reward_single_trial(model_kwargs.copy())
+        episode_data = model_reward_single_trial(reward_probs_list, model_kwargs.copy())
         episode_data = episode_data.values.astype(np.uint8)
         episodes_data.append(episode_data)
 
@@ -101,8 +101,8 @@ def write_df(df, lock=None, output_file=None, output_folder='./'):
         df_to_file(df, output_file)
 
 
-def do_kwargs(lock: Optional['lock'], model_kwargs, output_file: Optional[str], n=400, output_folder='./'):
-    episodes_data, full_kwargs = model_reward(model_kwargs.copy(), n=n)    
+def do_kwargs(lock: Optional['lock'], model_kwargs, output_file: Optional[str], n=400, output_folder='./', reward_probs_list=reward_probs_list):
+    episodes_data, full_kwargs = model_reward(reward_probs_list, model_kwargs.copy(), n=n)    
     reward_rates = [episode_data[:, 3].mean() for episode_data in episodes_data]
 
     df_rows = pd.concat(\
@@ -116,6 +116,24 @@ def do_kwargs(lock: Optional['lock'], model_kwargs, output_file: Optional[str], 
     return full_kwargs
 
 
+def gen_gaussian_random_walk(lims=(0.25, 0.75), stdev=0.025, n=200):
+    # reflects at outer limits
+    start_point = np.random.uniform(*lims)
+    out = [start_point]
+    for _ in range(n-1):
+        new_point = out[-1] + np.random.normal(0, stdev)
+        if new_point > lims[1]:
+            new_point = 2*lims[1] - new_point
+        elif new_point < lims[0]:
+            new_point = 2*lims[0] - new_point
+        out.append(new_point)
+
+    return np.array(out)
+
+def gen_fake_reward_probs():
+    reward_probs = np.array([gen_gaussian_random_walk() for _ in range(4)])
+    reward_probs = reward_probs.transpose(1, 0)  # 200, 4
+    return reward_probs
 
 
 betas = np.array([1.0, 0.0, 0.0])
@@ -135,10 +153,26 @@ alphas = [round(x, 4) for x in alphas]
 lams = [0.0, 0.1, 0.3, 0.6] + [0.6 + 0.5 * i for i in range(1, 20)]
 
 
-
 if __name__ == '__main__':
-    output_folder = 'kastner_generation_05_01_2024'
+    output_folder = 'kastner_generation_13_01_2024_mb'
     kwargs_list = []
+
+    ##### many new reward_probs_lists
+    kwargs = {
+        'beta_mb': 8.0,
+        'beta_mf': 0.0,
+    }
+    for _ in range(500):
+        rps = gen_fake_reward_probs()
+        o_file_uuid = str(uuid.uuid4())
+        output_file  = o_file_uuid + '.csv'
+        os.makedirs(output_folder, exist_ok=True)
+        np.save(os.path.join(output_folder, o_file_uuid + '.npy'), rps)
+        kwargs_list.append((kwargs, output_file, 100, output_folder, rps))
+
+    with Pool(processes=10) as p:
+        results = list(tqdm(p.imap(do_kwargs_star, [(None, *args) for args in kwargs_list]), total=len(kwargs_list)))
+    exit()
 
 
     ##### b)
